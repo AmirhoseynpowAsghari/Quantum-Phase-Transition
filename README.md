@@ -324,6 +324,3 @@ If you use this code in academic work, cite the relevant literature for BdG theo
 }
 ```
 
-## License
-
-No license file is currently included in the repository. Add a `LICENSE` file before distributing or reusing the code publicly.
