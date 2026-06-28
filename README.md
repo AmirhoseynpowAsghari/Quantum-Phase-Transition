@@ -1,436 +1,329 @@
-# README.md
+# Quantum Phase Transition
 
-```markdown
-# Superconducting Concurrence Calculator
+A modular Python codebase for studying concurrence and phase-transition-like behavior in a spin-orbit-coupled superconducting system. The project solves self-consistent Bogoliubov–de Gennes (BdG)-style gap equations over a two-dimensional square-lattice momentum grid, evaluates real-space Green's functions, and plots the concurrence as a function of the interaction parameter `U`.
 
-A modular Python toolkit for computing quantum **concurrence** in a
-spin-orbit-coupled superconductor as a function of the interaction
-parameter **U**.  
-The code solves the self-consistent Bogoliubov–de Gennes (BdG) gap
-equations on a 2-D square-lattice k-space grid and evaluates the
-real-space Green's functions that enter the concurrence formula.
+## Features
 
----
+- Sweeps the interaction strength `U` across negative, near-zero, and positive regimes.
+- Solves coupled self-consistency equations for superconducting order parameters and chemical potential.
+- Computes normal and anomalous Green's functions using two-dimensional Simpson integration over the Brillouin zone.
+- Evaluates quantum concurrence from the Green's functions.
+- Uses warm starts and continuation to improve convergence across difficult parameter regions.
+- Produces a plot of concurrence `C(U)` and its numerical derivative `dC/dU`.
 
-## Table of Contents
+## Repository Structure
 
-- [Physics Background](#physics-background)
-- [Project Structure](#project-structure)
-- [Module Descriptions](#module-descriptions)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [How It Works](#how-it-works)
-- [Solver Strategy](#solver-strategy)
-- [Output](#output)
-- [Extending the Code](#extending-the-code)
-- [Dependencies](#dependencies)
-- [License](#license)
-
----
-
-## Physics Background
-
-### Model
-
-The system is a 2-D square-lattice superconductor with
-
-| Symbol    | Meaning                                      |
-|-----------|----------------------------------------------|
-| `t`       | Nearest-neighbour hopping amplitude          |
-| `V_SO`    | Rashba spin-orbit coupling strength          |
-| `U`       | On-site interaction (attractive `U<0`, repulsive `U>0`) |
-| `Delta_t` | Triplet pairing amplitude                    |
-| `n`       | Average electron filling per site            |
-
-The single-particle dispersion for spin band *s* = ±1 is
-
-```
-ε_k^s = -2t(cos kx + cos ky) ∓ 2 V_SO √(sin²kx + sin²ky)
-```
-
-### BdG Gap Equations
-
-Three coupled self-consistency equations are solved simultaneously:
-
-```
-Δ₀ + Σ_k  w_k  Δ_k / E_k  = 0          (singlet gap)
-ΔS + 8Δt  Σ_k  Δ_k / E_k  = 0          (triplet gap)
-n  = 1 - (1/2Nk²) Σ_k (ε_k - μ)/E_k   (filling)
-```
-
-where `E_k = √(Δ_k² + (ε_k - μ)²)` is the quasiparticle energy.
-
-### Green's Functions
-
-The normal **G** and anomalous **F** Green's functions are obtained
-by a 2-D Simpson integration over the Brillouin zone:
-
-```
-G(r,θ) = -(i/4π²) ∫∫ u_k u_k* e^{ik·r} d²k
-F(r,θ) =  (i/4π²) ∫∫ v_k* u_k* e^{-ik·r} d²k
-```
-
-### Concurrence
-
-The entanglement concurrence between two sites separated by **r** is
-
-```
-p = (f² + g²) / (2 + f² - g²)
-C = max(0,  (3p - 1) / 2)
-```
-
-where `g = Im G / Im G₀` and `f = Im F / Im G₀`.
-
----
-
-## Project Structure
-
-```
-superconducting_concurrence/
-│
-├── main.py               ← Entry point
-├── config.py             ← All parameters and numerical settings
-├── greens_functions.py   ← BZ-integrated Green's functions
-├── concurrence.py        ← Concurrence from G and F
-├── self_consistent.py    ← BdG gap-equation solver (multi-method cascade)
-├── continuation.py       ← Parameter-continuation wrapper
-├── analysis.py           ← High-level U-sweep loop
-├── plotting.py           ← Matplotlib figures
-├── utils.py              ← Smoothing & numerical differentiation
-│
-├── requirements.txt
+```text
+Quantum-Phase-Transition/
+├── main.py               # Entry point for the full sweep and plotting workflow
+├── config.py             # Physical parameters, U sweep settings, and solver options
+├── analysis.py           # High-level U-sweep loop
+├── self_consistent.py    # Self-consistent gap-equation solver
+├── continuation.py       # Parameter-continuation fallback solver
+├── greens_functions.py   # Brillouin-zone Green's function integration
+├── concurrence.py        # Concurrence calculation from Green's functions
+├── plotting.py           # Plotting routines for C(U) and dC/dU
+├── utils.py              # Smoothing and numerical differentiation utilities
 └── README.md
 ```
 
----
+## Requirements
 
-## Module Descriptions
+This project uses Python 3 and the following packages:
 
-### `config.py`
-Central place for **every** tuneable parameter.  
-Edit this file to change physics or numerics — no other file needs touching.
-
-| Section | Key variables |
-|---------|--------------|
-| Physical | `V_SO`, `Delta_t`, `n`, `Nk`, `t` |
-| Spatial | `R_FIXED`, `THETA_FIXED` |
-| U range | `U_NEGATIVE`, `U_NEAR_ZERO`, `U_POSITIVE`, `U_VALS` |
-| Solver tolerances | `SOLVER_CONFIG` dict |
-| Continuation | `CONTINUATION_CONFIG` dict |
-| Post-processing | `SMOOTHING_WINDOW`, `DERIVATIVE_WINDOW` |
-
----
-
-### `greens_functions.py`
-```
-compute_greens_functions(u_ks, v_ks, KX, KY, r, theta)
-    → G (complex), F (complex)
-```
-Performs a **2-D Simpson integration** of the spectral weights over
-the full Brillouin zone for a given real-space separation `(r, θ)`.
-
----
-
-### `concurrence.py`
-```
-compute_concurrence(G, F, G0)          → C (float)
-evaluate_concurrence_from_solution(…)  → C, G, F, G0
-```
-`evaluate_concurrence_from_solution` is a convenience wrapper that
-calls `compute_greens_functions` internally, so the caller only needs
-`u_ks`, `v_ks`, `KX`, `KY`.
-
----
-
-### `self_consistent.py`
-Core solver.  Exposes one public function:
-```
-compute_self_consistent_improved(V_SO, U, n, Nk, Delta_t,
-                                 initial_guess=None, verbose=False)
-    → u_ks, v_ks, KX, KY, sol, final_sum_DS
-```
-Internally uses a **three-stage solver cascade**
-(see [Solver Strategy](#solver-strategy)).
-
----
-
-### `continuation.py`
-```
-solve_with_continuation(U_target, V_SO, n, Nk, Delta_t, …)
-    → u_ks, v_ks, KX, KY, sol, final_sum_DS
-```
-Walks from a known solution at `start_U` to `U_target` in small steps,
-passing each converged solution as the initial guess for the next step.
-Automatically refines the step size (up to `max_recursion` times) on failure.
-
----
-
-### `analysis.py`
-```
-run_U_sweep(U_vals, fixed_params, r, theta, verbose)
-    → U_vals (ndarray), C_vals (ndarray), metadata (dict)
-```
-Orchestrates the full sweep:
-1. Picks warm-start guesses from previously solved points.  
-2. Calls `compute_self_consistent_improved` (direct solve).  
-3. Falls back to `solve_with_continuation` if direct solve fails.  
-4. Calls `evaluate_concurrence_from_solution` and records `C`.
-
----
-
-### `plotting.py`
-```
-plot_concurrence(U_vals, C_vals, fixed_params, save_path=None)
-    → fig, axes
-```
-Produces a two-panel figure:
-- **Left** — Concurrence *C(U)*  
-- **Right** — Numerical derivative *dC/dU*
-
-Optionally saves to disk (`save_path`).
-
----
-
-### `utils.py`
-```
-smooth_data(x_vals, y_vals, window_size=3)          → ndarray
-compute_numerical_derivative(x_vals, y_vals, …)     → ndarray
-```
-`smooth_data` linearly interpolates across NaN gaps then applies a
-rolling mean.  
-`compute_numerical_derivative` uses centred finite differences on the
-smoothed data; boundary points use one-sided differences.
-
----
-
-## Installation
-
-### 1 — Clone the repository
-
-```bash
-git clone https://github.com/your-username/superconducting-concurrence.git
-cd superconducting-concurrence
+```text
+numpy
+scipy
+matplotlib
 ```
 
-### 2 — Create a virtual environment (recommended)
+Recommended versions:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-.venv\Scripts\activate           # Windows
-```
-
-### 3 — Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-`requirements.txt`:
-```
+```text
 numpy>=1.24
 scipy>=1.10
 matplotlib>=3.7
 ```
 
----
+## Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/AmirhoseynpowAsghari/Quantum-Phase-Transition.git
+cd Quantum-Phase-Transition
+```
+
+Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # macOS/Linux
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Install dependencies:
+
+```bash
+pip install numpy scipy matplotlib
+```
+
+Optional: create a `requirements.txt` file for reproducible installs:
+
+```bash
+pip freeze > requirements.txt
+```
 
 ## Quick Start
+
+Run the full calculation:
 
 ```bash
 python main.py
 ```
 
-This will:
-1. Read all parameters from `config.py`.  
-2. Sweep U from −3 to +4 (131 points by default).  
-3. Print solver progress to the terminal.  
-4. Display a two-panel Matplotlib figure.  
-5. Save the figure as `concurrence_vs_U.png`.
+The script will:
 
----
+1. Load the physical and numerical parameters from `config.py`.
+2. Sweep the interaction parameter `U` using the arrays defined in `config.py`.
+3. Solve the self-consistent equations at each point.
+4. Compute the concurrence for the configured real-space separation.
+5. Plot `C(U)` and `dC/dU`.
+6. Save the figure as:
+
+```text
+concurrence_vs_U.png
+```
 
 ## Configuration
 
-Open `config.py` and adjust any of the following:
+Most settings are controlled in `config.py`.
+
+### Physical Parameters
 
 ```python
-# ── Physical Parameters ───────────────────────────────────────
 FIXED_PARAMS = {
-    'V_SO'   : 0.01,   # Spin-orbit coupling
-    'Delta_t': 0.1,    # Triplet pairing amplitude
-    'n'      : 1.875,  # Filling factor  (0 < n < 2)
-    'Nk'     : 600,    # k-grid size  (larger → slower but more accurate)
-    't'      : 0.1,    # Hopping amplitude
+    "V_SO": 0.01,    # Spin-orbit coupling strength
+    "Delta_t": 0.1, # Triplet pairing parameter
+    "n": 1.875,     # Filling factor
+    "Nk": 600,      # k-space grid size: Nk x Nk
+    "t": 0.1,       # Hopping amplitude
 }
-
-# ── Real-space probe point ────────────────────────────────────
-R_FIXED     = 0.2    # distance |r|
-THETA_FIXED = 0.0    # angle    θ  (radians)
-
-# ── U sweep ──────────────────────────────────────────────────
-U_NEGATIVE  = np.linspace(-3.0,  -0.099, 40)
-U_NEAR_ZERO = np.linspace(-0.1,   0.1,  41)
-U_POSITIVE  = np.linspace( 0.1001, 4.0, 50)
 ```
 
-> **Tip — fast test run**: set `'Nk': 50` and reduce the U arrays to
-> ~10 points each. A full `Nk=600` sweep takes several hours on a
-> single CPU core.
+### Real-Space Probe Point
 
----
-
-## How It Works
-
+```python
+R_FIXED = 0.2
+THETA_FIXED = 0.0
 ```
+
+### Interaction Sweep
+
+```python
+U_NEGATIVE = np.linspace(-3.0, -0.099, 40)
+U_NEAR_ZERO = np.linspace(-0.1, 0.1, 41)
+U_POSITIVE = np.linspace(0.1001, 4.0, 50)
+U_VALS = np.concatenate([U_NEGATIVE, U_NEAR_ZERO, U_POSITIVE])
+```
+
+### Solver Controls
+
+```python
+SOLVER_CONFIG = {
+    "ftol": 1e-8,
+    "xtol": 1e-8,
+    "gtol": 1e-8,
+    "max_nfev": 5000,
+    "residual_tol": 1e-5,
+    "cost_tol": 1e-8,
+}
+```
+
+### Continuation Controls
+
+```python
+CONTINUATION_CONFIG = {
+    "steps": 10,
+    "max_recursion": 2,
+}
+```
+
+For a faster test run, reduce `Nk` and use fewer `U` points. For example, set `Nk` to `50` and shorten the `U_NEGATIVE`, `U_NEAR_ZERO`, and `U_POSITIVE` arrays.
+
+## How the Workflow Runs
+
+```text
 main.py
-  │
-  ├─ run_U_sweep()                      [analysis.py]
-  │     │
-  │     ├─ for each U:
-  │     │     │
-  │     │     ├─ compute_self_consistent_improved()   [self_consistent.py]
-  │     │     │     ├─ _build_kspace()
-  │     │     │     ├─ _build_initial_guess()
-  │     │     │     ├─ _try_least_squares()
-  │     │     │     ├─ _try_minimize()
-  │     │     │     └─ _try_basinhopping()
-  │     │     │
-  │     │     ├─ (on failure) solve_with_continuation()  [continuation.py]
-  │     │     │     └─ compute_self_consistent_improved() × N steps
-  │     │     │
-  │     │     └─ evaluate_concurrence_from_solution()  [concurrence.py]
-  │     │           ├─ compute_greens_functions()      [greens_functions.py]
-  │     │           └─ compute_concurrence()
-  │     │
-  │     └─ returns U_vals, C_vals, metadata
-  │
-  └─ plot_concurrence()                 [plotting.py]
-        └─ compute_numerical_derivative()  [utils.py]
-              └─ smooth_data()
+│
+├── run_U_sweep(...)                         # analysis.py
+│   │
+│   ├── choose an initial guess or warm start
+│   ├── compute_self_consistent_improved(...) # self_consistent.py
+│   │   ├── least_squares solver attempts
+│   │   ├── minimize solver attempts
+│   │   └── basinhopping fallback
+│   │
+│   ├── solve_with_continuation(...)          # continuation.py, if direct solve fails
+│   └── evaluate_concurrence_from_solution(...) # concurrence.py
+│       └── compute_greens_functions(...)     # greens_functions.py
+│
+└── plot_concurrence(...)                     # plotting.py
+    └── compute_numerical_derivative(...)     # utils.py
 ```
 
----
+## Module Overview
 
-## Solver Strategy
+### `main.py`
 
-The self-consistent equations are nonlinear and can be hard to solve,
-especially near phase boundaries or for negative U.  
-Three solvers are tried **in cascade**; the first one to satisfy the
-residual tolerance wins.
+Entry point for the project. It runs the configured `U` sweep, computes concurrence values, and saves the final plot.
 
-| Priority | Solver | Methods tried | Notes |
-|----------|--------|---------------|-------|
-| 1 | `scipy.optimize.least_squares` | `lm`, `trf`, `dogbox` | Fastest; works well away from singularities |
-| 2 | `scipy.optimize.minimize` | `Powell`, `Nelder-Mead`, `BFGS`, `CG` | Robust to non-smooth landscapes |
-| 3 | `scipy.optimize.basinhopping` | wraps Powell / Nelder-Mead | Global search; used as last resort |
+### `config.py`
 
-If **all direct solvers** fail the code falls back to
-**parameter continuation**: it starts from the nearest already-solved
-point and walks toward the target U in small steps, using each
-converged solution as the warm start for the next step.  
-If a step fails, the step count is doubled (up to `max_recursion` times).
+Defines physical parameters, the real-space evaluation point, the `U` sweep arrays, solver tolerances, continuation settings, and smoothing options.
 
----
+### `analysis.py`
+
+Contains `run_U_sweep`, which coordinates the calculation across all `U` values. It stores converged solutions and reuses them as warm starts for nearby points.
+
+### `self_consistent.py`
+
+Builds the momentum-space grid and solves the self-consistent equations for:
+
+```text
+Delta0, DeltaS, mu
+```
+
+The solver tries multiple numerical strategies:
+
+1. `scipy.optimize.least_squares`
+2. `scipy.optimize.minimize`
+3. `scipy.optimize.basinhopping`
+
+### `continuation.py`
+
+Provides a fallback strategy when a direct solve fails. It walks from a known solution to the target `U` value through smaller intermediate steps.
+
+### `greens_functions.py`
+
+Computes the normal Green's function `G` and anomalous Green's function `F` by integrating over the Brillouin zone with Simpson integration.
+
+### `concurrence.py`
+
+Computes concurrence using normalized imaginary parts of the Green's functions.
+
+### `plotting.py`
+
+Generates a two-panel Matplotlib figure showing:
+
+- concurrence versus `U`
+- numerical derivative of concurrence versus `U`
+
+### `utils.py`
+
+Provides helper functions for smoothing data and computing finite-difference derivatives.
 
 ## Output
 
-### Terminal
+Running:
 
-```
-════════════════════════════════════════════════════
-  Superconducting Concurrence  –  U sweep
-════════════════════════════════════════════════════
-
-─── U = -3.000000  [1/131] ───
-  Initial guess: [0.1, -0.05, -0.312]
-  least_squares / lm ...
-  ✓ converged  cost=3.21e-17  fun=[…]
-  Concurrence C = 0.034521
-
-...
-
-═══ Summary ═══
-Successful points : 128 / 131  (97.7 %)
-Elapsed time      : 4823.41 s
+```bash
+python main.py
 ```
 
-### Figure
+creates a plot file:
 
-A PNG file `concurrence_vs_U.png` with two panels:
-
-```
-┌────────────────────────┬───────────────────────────┐
-│   Concurrence C(U)     │   Derivative  dC/dU        │
-│                        │                            │
-│  0.8 ┤    ╭──╮         │  4 ┤       │               │
-│  0.4 ┤ ╭──╯  ╰──       │  0 ┤───────┼───────        │
-│  0.0 ┤─╯               │ -4 ┤       │               │
-│      └────────── U      │    └──────────── U         │
-└────────────────────────┴───────────────────────────┘
+```text
+concurrence_vs_U.png
 ```
 
----
+The figure contains two panels:
 
-## Extending the Code
+```text
+C(U)       : concurrence as a function of interaction strength
+ dC/dU     : numerical derivative, useful for identifying sharp changes
+```
 
-### Change the lattice geometry
-Edit `_build_kspace()` in `self_consistent.py` — replace the square-lattice
-dispersion `ε_k` with your own.
+The terminal also prints solver progress, convergence information, concurrence values, and a final summary.
 
-### Add temperature dependence
-Replace the zero-temperature coherence factors in `_build_uv()` with
-Fermi–Dirac-weighted versions.
+## Performance Notes
 
-### Sweep a different parameter (e.g. V_SO)
-In `analysis.py`, copy `run_U_sweep` and replace the U loop with a
-`V_SO` loop, passing `U` as a fixed argument to
-`compute_self_consistent_improved`.
+The runtime is strongly affected by `Nk`, because the code uses an `Nk x Nk` momentum grid. The default value `Nk = 600` can be computationally expensive. For debugging or development, start with a smaller grid such as:
 
-### Save raw data
-Add after the sweep in `main.py`:
+```python
+FIXED_PARAMS["Nk"] = 50
+```
+
+After confirming the workflow works, increase `Nk` for more accurate results.
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'numpy'`
+
+Install the required packages:
+
+```bash
+pip install numpy scipy matplotlib
+```
+
+### The script runs slowly
+
+Reduce `Nk` in `config.py` and/or reduce the number of sampled `U` values.
+
+### Some `U` values fail to converge
+
+The code already attempts warm starts and continuation. If failures persist, try:
+
+- reducing the spacing between nearby `U` values
+- increasing `CONTINUATION_CONFIG["steps"]`
+- increasing solver iteration limits in `SOLVER_CONFIG`
+- using a smaller `Nk` while debugging
+
+## Saving Raw Data
+
+To save the sweep results as a CSV file, add the following to `main.py` after `run_U_sweep(...)` returns:
 
 ```python
 import numpy as np
-np.savetxt("results.csv",
-           np.column_stack([U_vals, C_vals]),
-           header="U,Concurrence",
-           delimiter=",")
+
+np.savetxt(
+    "concurrence_results.csv",
+    np.column_stack([U_vals, C_vals]),
+    delimiter=",",
+    header="U,Concurrence",
+    comments="",
+)
 ```
 
----
+## Suggested `requirements.txt`
 
-## Dependencies
+A simple `requirements.txt` for this project would be:
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `numpy` | ≥ 1.24 | Array maths, k-space grids |
-| `scipy` | ≥ 1.10 | Optimisation, Simpson integration, interpolation |
-| `matplotlib` | ≥ 3.7 | Plotting |
-
-All are available on PyPI and installable via `pip`.
-
----
-
-## License
-
-This project is released under the **MIT License**.  
-See [`LICENSE`](LICENSE) for the full text.
-
----
+```text
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+```
 
 ## Citation
 
-If you use this code in published work, please cite the relevant
-BdG / concurrence literature and acknowledge this repository:
+If you use this code in academic work, cite the relevant literature for BdG theory, superconducting Green's functions, and concurrence. You may also acknowledge this repository:
 
-```
-@misc{superconducting_concurrence,
-  author = {Your Name},
-  title  = {Superconducting Concurrence Calculator},
-  year   = {2025},
-  url    = {https://github.com/your-username/superconducting-concurrence}
+```bibtex
+@misc{quantum_phase_transition,
+  author = {AmirhoseynpowAsghari},
+  title = {Quantum Phase Transition},
+  year = {2026},
+  url = {https://github.com/AmirhoseynpowAsghari/Quantum-Phase-Transition}
 }
 ```
-```
+
+## License
+
+No license file is currently included in the repository. Add a `LICENSE` file before distributing or reusing the code publicly.
